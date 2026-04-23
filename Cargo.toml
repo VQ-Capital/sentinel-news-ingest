@@ -1,0 +1,18 @@
+# ========== DOSYA: sentinel-news-ingest/Cargo.toml ==========
+[package]
+name = "sentinel-news-ingest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.36", features = ["full", "rt-multi-thread"] }
+async-nats = "0.34"
+prost = "0.12"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+chrono = "0.4"
+rand = "0.8" # Sentetik/Test haber akışı üretmek için
+
+[build-dependencies]
+prost-build = "0.12"
