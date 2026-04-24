@@ -1,7 +1,7 @@
 # ========== DOSYA: sentinel-news-ingest/Cargo.toml ==========
 [package]
 name = "sentinel-news-ingest"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -12,8 +12,15 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1.0"
 chrono = "0.4"
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"] }
-rss = "2.0"
+
+# Ağ ve WebSocket (Gerçek Zamanlı Veri)
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+
+# Bellek dostu (Zero-Copy) veri işleme
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bytes = "1.5"
 
 [build-dependencies]
 prost-build = "0.12"
