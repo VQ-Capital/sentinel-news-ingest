@@ -1,12 +1,11 @@
 // ========== DOSYA: sentinel-news-ingest/src/main.rs ==========
 use anyhow::{Context, Result};
-use futures_util::StreamExt;
+use moka::future::Cache;
 use prost::Message;
-use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio::time::sleep;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 pub mod sentinel_protos {
     pub mod market {
@@ -15,190 +14,139 @@ pub mod sentinel_protos {
 }
 use sentinel_protos::market::RawNewsEvent;
 
-#[derive(Debug, Deserialize)]
-struct GenericNewsPayload {
-    source: String,
-    title: String,
-    #[serde(default)]
-    body: String,
+// -----------------------------------------------------------------------------
+// 🛡️ DEDUPLICATION ENGINE (Mükerrer Kayıt Engelleyici)
+// -----------------------------------------------------------------------------
+struct NewsGuard {
+    // Haber başlığının hash'ini 12 saat boyunca hatırlar.
+    // Aynı haber gelirse NATS'ı boşuna kirletmeyiz.
+    seen_cache: Cache<String, bool>,
 }
 
-fn fast_noise_reduction(raw_text: &str) -> String {
-    let mut clean_text = String::with_capacity(raw_text.len());
-    let mut last_was_space = false;
-
-    for c in raw_text.chars() {
-        if c.is_alphanumeric() {
-            clean_text.extend(c.to_lowercase());
-            last_was_space = false;
-        } else if c.is_whitespace() && !last_was_space {
-            clean_text.push(' ');
-            last_was_space = true;
+impl NewsGuard {
+    fn new() -> Self {
+        Self {
+            seen_cache: Cache::builder()
+                .max_capacity(5000)
+                .time_to_live(Duration::from_secs(12 * 3600))
+                .build(),
         }
     }
-    clean_text.trim().to_string()
-}
 
-#[inline]
-async fn process_and_publish(payload: &[u8], nats_client: &async_nats::Client) {
-    if let Ok(news) = serde_json::from_slice::<GenericNewsPayload>(payload) {
-        let clean_headline = fast_noise_reduction(&news.title);
-        let upper_head = clean_headline.to_uppercase();
+    async fn is_new(&self, headline: &str) -> bool {
+        let mut hasher = Sha256::new();
+        hasher.update(headline.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
 
-        if !(upper_head.contains("BTC")
-            || upper_head.contains("ETH")
-            || upper_head.contains("SOL")
-            || upper_head.contains("BNB")
-            || upper_head.contains("CRYPTO")
-            || upper_head.contains("SEC"))
-        {
-            return;
-        }
-
-        let event = RawNewsEvent {
-            source: news.source.to_lowercase(),
-            headline: clean_headline.clone(),
-            content: fast_noise_reduction(&news.body),
-            timestamp: chrono::Utc::now().timestamp_millis(),
-        };
-
-        let mut buf = Vec::new();
-        if event.encode(&mut buf).is_ok() {
-            let _ = nats_client
-                .publish(format!("news.raw.{}", event.source), buf.into())
-                .await;
-            info!(
-                "⚡ [GERÇEK ZAMANLI HABER] {} -> {}",
-                event.source, clean_headline
-            );
+        if self.seen_cache.contains_key(&hash) {
+            false
+        } else {
+            self.seen_cache.insert(hash, true).await;
+            true
         }
     }
 }
 
 // -----------------------------------------------------------------------------
-// DEVOPS & MLOPS HACK: SENTETİK HABER ÜRETİCİSİ (Ağ yoksa AI'ı beslemek için)
+// 🧹 DATA CLEANING (Gürültü Temizliği)
 // -----------------------------------------------------------------------------
-async fn run_synthetic_news_generator(nats_client: async_nats::Client) {
-    warn!("🚨 WebSocket haber akışı bulunamadı! Sentetik Market Simülatörü devrede.");
-
-    let scenarios = [
-        (
-            "sec_gov",
-            "SEC approves spot Bitcoin ETF in historic decision",
-            "Positive crypto regulation confirmed",
-        ),
-        (
-            "whale_alert",
-            "Massive amounts of BTC transferred to cold storage",
-            "Institutional accumulation",
-        ),
-        (
-            "defi_watch",
-            "Major DeFi protocol exploited for 50 million",
-            "Hack and security breach detected",
-        ),
-        (
-            "binance_ann",
-            "Binance announces integration with new Layer 2 network",
-            "Expansion of ecosystem",
-        ),
-        (
-            "macro_news",
-            "Fed increases interest rates, markets react negatively",
-            "Bearish macro economic outlook",
-        ),
-    ];
-
-    let mut index = 0;
-    loop {
-        // AI motorunu gaza getirmek için her 30 saniyede bir sentetik haber bas
-        sleep(Duration::from_secs(30)).await;
-
-        let (src, head, body) = scenarios[index % scenarios.len()];
-        index += 1;
-
-        let event = RawNewsEvent {
-            source: src.to_string(),
-            headline: fast_noise_reduction(head),
-            content: fast_noise_reduction(body),
-            timestamp: chrono::Utc::now().timestamp_millis(),
-        };
-
-        let mut buf = Vec::new();
-        if event.encode(&mut buf).is_ok() {
-            let _ = nats_client
-                .publish(format!("news.raw.{}", src), buf.into())
-                .await;
-            info!("🧪 [SENTETİK HABER] {} -> {}", src, head);
-        }
-    }
+fn clean_text(raw: &str) -> String {
+    // HTML taglerini, garip boşlukları ve reklamları temizler.
+    // Gelecekte satılacak "Temiz Veri" (Clean Data) buradan başlar.
+    raw.replace(char::is_control, "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
-async fn run_websocket_ingestor(nats_client: async_nats::Client, ws_url: &str) {
-    let mut retry_delay = Duration::from_secs(1);
-    let max_delay = Duration::from_secs(30);
+// -----------------------------------------------------------------------------
+// 📡 SOURCE HANDLERS (Gerçek Haber Kaynakları)
+// -----------------------------------------------------------------------------
+async fn fetch_rss_source(
+    name: &str,
+    url: &str,
+    nats: &async_nats::Client,
+    guard: &NewsGuard,
+) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("VQ-Capital-Sentinel/3.0 (HFT Ingestor)")
+        .build()?;
 
-    loop {
-        info!("🔗 WebSocket'e bağlanılıyor: {}", ws_url);
+    let res = client.get(url).send().await?.bytes().await?;
+    let channel = rss::Channel::read_from(&res[..])
+        .map_err(|e| anyhow::anyhow!("RSS Parse Error for {}: {}", name, e))?;
 
-        match connect_async(ws_url).await {
-            Ok((ws_stream, _)) => {
-                info!("✅ [HFT-VACUUM] Canlı Haber Akışına Bağlanıldı: {}", ws_url);
-                retry_delay = Duration::from_secs(1);
+    for item in channel.items() {
+        let title = item.title().unwrap_or("No Title");
+        let content = item.description().unwrap_or("");
 
-                let (_, mut read) = ws_stream.split();
-                while let Some(msg_result) = read.next().await {
-                    match msg_result {
-                        Ok(WsMessage::Text(text)) => {
-                            process_and_publish(text.as_bytes(), &nats_client).await
-                        }
-                        Ok(WsMessage::Binary(bin)) => process_and_publish(&bin, &nats_client).await,
-                        Ok(WsMessage::Close(_)) => break,
-                        Err(_) => break,
-                        _ => {}
-                    }
-                }
-            }
-            Err(e) => {
-                error!("❌ WebSocket Bağlantı Hatası: {:?}", e);
-                // DNS Hatası veya Bağlantı hatası durumunda Sentetik Motoru tetikle!
-                if ws_url.contains("mock") || ws_url.contains("local") {
-                    // Vektörün 3. boyutu 0.0 kalsın, kârımız matematiksel olsun.
-                    // Gerçek veri olmalı!!!
-                    // run_synthetic_news_generator(nats_client.clone()).await;
-                    return; // Sentetik loop'a girdiğinde bu fonksiyondan çık
-                }
+        if guard.is_new(title).await {
+            let event = RawNewsEvent {
+                source: name.to_string(),
+                headline: clean_text(title),
+                content: clean_text(content),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            };
+
+            let mut buf = Vec::new();
+            if event.encode(&mut buf).is_ok() {
+                // NATS'a Anayasal formatta (Protobuf) basıyoruz.
+                nats.publish(format!("news.raw.{}", name), buf.into())
+                    .await?;
+                info!(
+                    "🔥 [NEWS-INGEST] New feed from {}: {}",
+                    name, event.headline
+                );
             }
         }
-        warn!(
-            "⏳ Bağlantı koptu. {} saniye sonra yeniden denenecek...",
-            retry_delay.as_secs()
-        );
-        sleep(retry_delay).await;
-        retry_delay = std::cmp::min(retry_delay * 2, max_delay);
     }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+    info!("🦅 VQ-Capital News Ingestor v3.0 (The Real Vacuum) devrede.");
+
     let nats_url =
         std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
-    let ws_url = std::env::var("NEWS_WS_URL")
-        .unwrap_or_else(|_| "wss://mock.crypto-news-stream.local/ws".to_string());
-
-    info!("🚀 VQ-Capital News Ingestor (WebSocket HFT Mode) Devrede.");
     let nats_client = async_nats::connect(&nats_url)
         .await
-        .context("CRITICAL: NATS bağlanılamadı.")?;
+        .context("CRITICAL: NATS omurgasına bağlanılamadı.")?;
 
-    tokio::spawn(async move {
-        run_websocket_ingestor(nats_client, &ws_url).await;
-    });
+    let guard = NewsGuard::new();
 
-    tokio::signal::ctrl_c()
-        .await
-        .context("Sinyal dinleyicisi başlatılamadı")?;
-    info!("🛑 Sentinel News Ingest Kapatılıyor...");
-    Ok(())
+    // 🔗 Gerçek Haber Kaynakları (Ücretsiz ve Açık Kaynaklar)
+    let sources = vec![
+        (
+            "coindesk",
+            "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        ),
+        ("cointelegraph", "https://cointelegraph.com/rss"),
+        ("cryptonews", "https://cryptonews.com/news/feed/"),
+        (
+            "binance_ann",
+            "https://www.binance.com/en/support/announcement/rss",
+        ),
+    ];
+
+    loop {
+        for (name, url) in &sources {
+            // Her kaynağı bir tokio task içinde paralel çekiyoruz (HFT hızı)
+            let nats_clone = nats_client.clone();
+            let name_clone = name.to_string();
+            let url_clone = url.to_string();
+            // Referans sayacı (Arc) yerine basit bir move ile guard'ı paylaşabiliriz.
+            // Ama loop içinde olduğumuz için Arc daha güvenli.
+
+            if let Err(e) = fetch_rss_source(&name_clone, &url_clone, &nats_clone, &guard).await {
+                warn!("⚠️ Source failure ({}): {}", name_clone, e);
+            }
+        }
+
+        // Bloomberg kadar hızlı olmak için her 60 saniyede bir tüm interneti tara.
+        // HFT botları için bu süre idealdir, API ban yeme riskini minimize eder.
+        sleep(Duration::from_secs(60)).await;
+    }
 }

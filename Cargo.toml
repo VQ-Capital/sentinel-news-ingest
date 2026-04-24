@@ -1,26 +1,28 @@
 # ========== DOSYA: sentinel-news-ingest/Cargo.toml ==========
 [package]
 name = "sentinel-news-ingest"
-version = "0.3.0"
+version = "0.8.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.36", features = ["full", "rt-multi-thread"] }
+# HFT Runtime
+tokio = { version = "1.36", features = ["full"] }
 async-nats = "0.34"
 prost = "0.12"
+anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-anyhow = "1.0"
 chrono = "0.4"
 
-# Ağ ve WebSocket (Gerçek Zamanlı Veri)
-tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
-futures-util = "0.3"
+# Ağ ve Veri Çekme (Real-Path)
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+rss = "2.0" # RSS Parser
+url = "2.5"
 
-# Bellek dostu (Zero-Copy) veri işleme
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# Zero-Allocation & Performance
 bytes = "1.5"
+moka = { version = "0.12", features = ["future"] } # TTL'li Deduplication Cache
+sha2 = "0.10" # Haberleri parmak iziyle (hash) tanımak için
 
 [build-dependencies]
 prost-build = "0.12"
