@@ -163,7 +163,9 @@ async fn run_websocket_ingestor(nats_client: async_nats::Client, ws_url: &str) {
                 error!("❌ WebSocket Bağlantı Hatası: {:?}", e);
                 // DNS Hatası veya Bağlantı hatası durumunda Sentetik Motoru tetikle!
                 if ws_url.contains("mock") || ws_url.contains("local") {
-                    run_synthetic_news_generator(nats_client.clone()).await;
+                    // Vektörün 3. boyutu 0.0 kalsın, kârımız matematiksel olsun.
+                    // Gerçek veri olmalı!!!
+                    // run_synthetic_news_generator(nats_client.clone()).await;
                     return; // Sentetik loop'a girdiğinde bu fonksiyondan çık
                 }
             }
