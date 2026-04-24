@@ -45,9 +45,13 @@ async fn process_and_publish(payload: &[u8], nats_client: &async_nats::Client) {
         let clean_headline = fast_noise_reduction(&news.title);
         let upper_head = clean_headline.to_uppercase();
 
-        if !(upper_head.contains("BTC") || upper_head.contains("ETH") || 
-             upper_head.contains("SOL") || upper_head.contains("BNB") || 
-             upper_head.contains("CRYPTO") || upper_head.contains("SEC")) {
+        if !(upper_head.contains("BTC")
+            || upper_head.contains("ETH")
+            || upper_head.contains("SOL")
+            || upper_head.contains("BNB")
+            || upper_head.contains("CRYPTO")
+            || upper_head.contains("SEC"))
+        {
             return;
         }
 
@@ -60,8 +64,13 @@ async fn process_and_publish(payload: &[u8], nats_client: &async_nats::Client) {
 
         let mut buf = Vec::new();
         if event.encode(&mut buf).is_ok() {
-            let _ = nats_client.publish(format!("news.raw.{}", event.source), buf.into()).await;
-            info!("⚡ [GERÇEK ZAMANLI HABER] {} -> {}", event.source, clean_headline);
+            let _ = nats_client
+                .publish(format!("news.raw.{}", event.source), buf.into())
+                .await;
+            info!(
+                "⚡ [GERÇEK ZAMANLI HABER] {} -> {}",
+                event.source, clean_headline
+            );
         }
     }
 }
@@ -71,21 +80,41 @@ async fn process_and_publish(payload: &[u8], nats_client: &async_nats::Client) {
 // -----------------------------------------------------------------------------
 async fn run_synthetic_news_generator(nats_client: async_nats::Client) {
     warn!("🚨 WebSocket haber akışı bulunamadı! Sentetik Market Simülatörü devrede.");
-    
+
     let scenarios = [
-        ("sec_gov", "SEC approves spot Bitcoin ETF in historic decision", "Positive crypto regulation confirmed"),
-        ("whale_alert", "Massive amounts of BTC transferred to cold storage", "Institutional accumulation"),
-        ("defi_watch", "Major DeFi protocol exploited for 50 million", "Hack and security breach detected"),
-        ("binance_ann", "Binance announces integration with new Layer 2 network", "Expansion of ecosystem"),
-        ("macro_news", "Fed increases interest rates, markets react negatively", "Bearish macro economic outlook"),
+        (
+            "sec_gov",
+            "SEC approves spot Bitcoin ETF in historic decision",
+            "Positive crypto regulation confirmed",
+        ),
+        (
+            "whale_alert",
+            "Massive amounts of BTC transferred to cold storage",
+            "Institutional accumulation",
+        ),
+        (
+            "defi_watch",
+            "Major DeFi protocol exploited for 50 million",
+            "Hack and security breach detected",
+        ),
+        (
+            "binance_ann",
+            "Binance announces integration with new Layer 2 network",
+            "Expansion of ecosystem",
+        ),
+        (
+            "macro_news",
+            "Fed increases interest rates, markets react negatively",
+            "Bearish macro economic outlook",
+        ),
     ];
 
     let mut index = 0;
     loop {
         // AI motorunu gaza getirmek için her 30 saniyede bir sentetik haber bas
         sleep(Duration::from_secs(30)).await;
-        
-        let (src, head, body) = scenarios[index % scenarios.length()];
+
+        let (src, head, body) = scenarios[index % scenarios.len()];
         index += 1;
 
         let event = RawNewsEvent {
@@ -97,7 +126,9 @@ async fn run_synthetic_news_generator(nats_client: async_nats::Client) {
 
         let mut buf = Vec::new();
         if event.encode(&mut buf).is_ok() {
-            let _ = nats_client.publish(format!("news.raw.{}", src), buf.into()).await;
+            let _ = nats_client
+                .publish(format!("news.raw.{}", src), buf.into())
+                .await;
             info!("🧪 [SENTETİK HABER] {} -> {}", src, head);
         }
     }
@@ -118,7 +149,9 @@ async fn run_websocket_ingestor(nats_client: async_nats::Client, ws_url: &str) {
                 let (_, mut read) = ws_stream.split();
                 while let Some(msg_result) = read.next().await {
                     match msg_result {
-                        Ok(WsMessage::Text(text)) => process_and_publish(text.as_bytes(), &nats_client).await,
+                        Ok(WsMessage::Text(text)) => {
+                            process_and_publish(text.as_bytes(), &nats_client).await
+                        }
                         Ok(WsMessage::Binary(bin)) => process_and_publish(&bin, &nats_client).await,
                         Ok(WsMessage::Close(_)) => break,
                         Err(_) => break,
@@ -135,7 +168,10 @@ async fn run_websocket_ingestor(nats_client: async_nats::Client, ws_url: &str) {
                 }
             }
         }
-        warn!("⏳ Bağlantı koptu. {} saniye sonra yeniden denenecek...", retry_delay.as_secs());
+        warn!(
+            "⏳ Bağlantı koptu. {} saniye sonra yeniden denenecek...",
+            retry_delay.as_secs()
+        );
         sleep(retry_delay).await;
         retry_delay = std::cmp::min(retry_delay * 2, max_delay);
     }
@@ -144,17 +180,23 @@ async fn run_websocket_ingestor(nats_client: async_nats::Client, ws_url: &str) {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    let nats_url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
-    let ws_url = std::env::var("NEWS_WS_URL").unwrap_or_else(|_| "wss://mock.crypto-news-stream.local/ws".to_string());
+    let nats_url =
+        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+    let ws_url = std::env::var("NEWS_WS_URL")
+        .unwrap_or_else(|_| "wss://mock.crypto-news-stream.local/ws".to_string());
 
     info!("🚀 VQ-Capital News Ingestor (WebSocket HFT Mode) Devrede.");
-    let nats_client = async_nats::connect(&nats_url).await.context("CRITICAL: NATS bağlanılamadı.")?;
+    let nats_client = async_nats::connect(&nats_url)
+        .await
+        .context("CRITICAL: NATS bağlanılamadı.")?;
 
     tokio::spawn(async move {
         run_websocket_ingestor(nats_client, &ws_url).await;
     });
 
-    tokio::signal::ctrl_c().await.context("Sinyal dinleyicisi başlatılamadı")?;
+    tokio::signal::ctrl_c()
+        .await
+        .context("Sinyal dinleyicisi başlatılamadı")?;
     info!("🛑 Sentinel News Ingest Kapatılıyor...");
     Ok(())
 }
