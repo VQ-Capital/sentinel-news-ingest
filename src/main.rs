@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
 
     let guard = NewsGuard::new();
 
-    // 🔗 Gerçek Haber Kaynakları (Ücretsiz ve Açık Kaynaklar)
+    // 🔗 Gerçek Haber Kaynakları (Binance Kaldırıldı)
     let sources = vec![
         (
             "coindesk",
@@ -125,10 +125,7 @@ async fn main() -> Result<()> {
         ),
         ("cointelegraph", "https://cointelegraph.com/rss"),
         ("cryptonews", "https://cryptonews.com/news/feed/"),
-        (
-            "binance_ann",
-            "https://www.binance.com/en/support/announcement/rss",
-        ),
+        // Binance kaldırıldı, çünkü bot korumasına takılıyor.
     ];
 
     loop {
