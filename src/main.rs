@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub mod sentinel_protos {
     pub mod market {
@@ -165,10 +165,8 @@ async fn fetch_rss_source(
             if event.encode(&mut buf).is_ok() {
                 nats.publish(format!("news.raw.{}", name), buf.into())
                     .await?;
-                info!(
-                    "🔥 [NEWS-INGEST] New feed from {}: {}",
-                    name, event.headline
-                );
+                // YENİ HALİ (debug seviyesine çekiyoruz, ekranda görünmez):
+                debug!("📰 News published to NATS: {}", event.headline);
             }
         }
     }
