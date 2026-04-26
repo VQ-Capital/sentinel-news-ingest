@@ -1,16 +1,10 @@
-# sentinel-semantic-ingest
-Görev: İnsan dilindeki veya sözel veriler.
+# 🧠 sentinel-semantic-ingest (Legacy: sentinel-news-ingest)
 
-Kaynaklar: RSS, Twitter, Telegram, CryptoPanic API.
+**Domain:** Semantic & Human-Language Ingestion
+**Rol:** Sistemin Kulakları (Sözel)
 
-NATS Subject: news.raw.*
+Bu servis sıradan bir "Haber Okuyucu" değildir. Dış dünyadan (RSS, Twitter, Telegram) akan düzensiz insan dilini (Unstructured Text) alır, Jaccard Similarity (Fuzzy Match) ve SHA256 ile spam/clickbait haberleri eler ve NLP (Yapay Zeka) motorunun işleyebileceği temiz `RawNewsEvent` formatına çevirir.
 
-Karakter: Metin işleme, NLP hazırlığı.
-
----
-
-Karakter: Anlamsal Analiz. Metinden skora dönüşüm.
-
-Veri: RSS, X (Twitter), Telegram, Borsa Duyuruları.
-
-SaaS Değeri: "Piyasanın Duygu Haritası" ve "Fake News Filtresi" olarak satılır.
+- **Kaynaklar:** CoinTelegraph, CoinDesk, Borsa Duyuruları (RSS/WSS)
+- **NATS Çıktısı:** `news.raw.*`
+- **SLA Hedefi:** < 100ms
